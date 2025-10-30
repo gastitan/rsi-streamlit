@@ -90,9 +90,9 @@ def obtener_tipo_cambio_actual():
             stock_us = yf.download(ticker_us, period="5d", progress=False)
             
             if not stock_ba.empty and not stock_us.empty:
-                precio_ba = stock_ba['Close'].iloc[-1]
-                precio_us = stock_us['Close'].iloc[-1]
-                tipo_cambio = (precio_ba / precio_us) * multiplicador
+                precio_ba = float(stock_ba['Close'].iloc[-1])
+                precio_us = float(stock_us['Close'].iloc[-1])
+                tipo_cambio = float((precio_ba / precio_us) * multiplicador)
                 
                 return tipo_cambio, precio_ba, precio_us
                 
@@ -258,7 +258,7 @@ with col1:
     with st.spinner("Obteniendo tipo de cambio actual..."):
         tc_actual, precio_ba, precio_us = obtener_tipo_cambio_actual()
     
-    if tc_actual:
+    if tc_actual is not None:
         st.success(f"**TC Actual: ${tc_actual:.2f}**")
         st.caption(f"GGAL.BA: ${precio_ba:.2f} | GGAL (NASDAQ): USD ${precio_us:.2f}")
     else:
@@ -295,20 +295,22 @@ if st.button("🚀 CALCULAR RSI DE TODAS LAS ACCIONES", type="primary", use_cont
         
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Sí, usar TC fijo"):
-                tc_actual, _, _ = obtener_tipo_cambio_actual()
-                if tc_actual:
-                    st.info(f"Usando TC fijo: ${tc_actual:.2f}")
-                    # Continuar con TC fijo (se maneja en obtener_datos_accion_usd)
-                    df_tc = None
-                else:
-                    st.error("❌ No se pudo obtener ni TC histórico ni actual.")
-                    st.stop()
-            else:
-                st.stop()
+            usar_tc_fijo = st.button("Sí, usar TC fijo")
         with col2:
-            if st.button("No, cancelar"):
+            cancelar = st.button("No, cancelar")
+        
+        if usar_tc_fijo:
+            tc_actual, _, _ = obtener_tipo_cambio_actual()
+            if tc_actual is not None:
+                st.info(f"Usando TC fijo: ${tc_actual:.2f}")
+                df_tc = None  # None indica que usaremos TC fijo
+            else:
+                st.error("❌ No se pudo obtener ni TC histórico ni actual.")
                 st.stop()
+        elif cancelar:
+            st.stop()
+        else:
+            st.stop()  # Si no presionó ningún botón, detener
     else:
         st.success(f"✅ TC histórico obtenido ({len(df_tc)} días)")
     
