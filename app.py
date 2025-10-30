@@ -45,11 +45,19 @@ def obtener_tipo_cambio_historico(periodo_dias=365):
                 st.warning(f"No hay datos para {ticker_ba} o {ticker_us}")
                 continue
             
-            # Crear DataFrame con ambos precios
+            # Extraer la columna Close correctamente
+            if isinstance(stock_ba.columns, pd.MultiIndex):
+                close_ba = stock_ba['Close'].iloc[:, 0] if stock_ba['Close'].ndim > 1 else stock_ba['Close']
+                close_us = stock_us['Close'].iloc[:, 0] if stock_us['Close'].ndim > 1 else stock_us['Close']
+            else:
+                close_ba = stock_ba['Close']
+                close_us = stock_us['Close']
+            
+            # Crear DataFrame con ambos precios usando el mismo índice
             df_tc = pd.DataFrame({
-                'BA': stock_ba['Close'],
-                'US': stock_us['Close']
-            })
+                'BA': close_ba,
+                'US': close_us
+            }, index=close_ba.index)
             
             # Eliminar NaN
             df_tc = df_tc.dropna()
@@ -136,6 +144,14 @@ def obtener_datos_accion_usd(ticker, df_tc, periodo_dias=90):
         if df.empty:
             return None, None
         
+        # Extraer columnas correctamente
+        if isinstance(df.columns, pd.MultiIndex):
+            close_ars = df['Close'].iloc[:, 0] if df['Close'].ndim > 1 else df['Close']
+            volume = df['Volume'].iloc[:, 0] if 'Volume' in df.columns and df['Volume'].ndim > 1 else (df['Volume'] if 'Volume' in df.columns else pd.Series([0]*len(df), index=df.index))
+        else:
+            close_ars = df['Close']
+            volume = df['Volume'] if 'Volume' in df.columns else pd.Series([0]*len(df), index=df.index)
+        
         # Si df_tc es None, usar TC fijo actual
         if df_tc is None:
             tc_actual, _, _ = obtener_tipo_cambio_actual()
@@ -143,16 +159,16 @@ def obtener_datos_accion_usd(ticker, df_tc, periodo_dias=90):
                 return None, None
             
             df_combined = pd.DataFrame({
-                'Close_ARS': df['Close'],
-                'Volume': df['Volume'],
-                'TC': tc_actual  # TC fijo
-            })
+                'Close_ARS': close_ars,
+                'Volume': volume,
+                'TC': float(tc_actual)
+            }, index=close_ars.index)
         else:
             # Crear DataFrame combinado
             df_combined = pd.DataFrame({
-                'Close_ARS': df['Close'],
-                'Volume': df['Volume']
-            })
+                'Close_ARS': close_ars,
+                'Volume': volume
+            }, index=close_ars.index)
             
             # Mergear con tipo de cambio
             df_combined = df_combined.join(df_tc[['TC']], how='left')
