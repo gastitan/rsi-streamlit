@@ -24,36 +24,53 @@ def obtener_tipo_cambio_historico(periodo_dias=365):
     Calcula el tipo de cambio histórico usando el ratio GGAL
     GGAL.BA / GGAL (NASDAQ) * 10
     """
-    try:
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=periodo_dias)
-        
-        # GGAL en Buenos Aires
-        ggal_ba = yf.Ticker("GGAL.BA")
-        df_ba = ggal_ba.history(start=start_date, end=end_date)
-        
-        # GGAL en NASDAQ
-        ggal_us = yf.Ticker("GGAL")
-        df_us = ggal_us.history(start=start_date, end=end_date)
-        
-        if df_ba.empty or df_us.empty:
-            return None
-        
-        # Crear DataFrame con ambos precios
-        df_tc = pd.DataFrame({
-            'GGAL_BA': df_ba['Close'],
-            'GGAL_US': df_us['Close']
-        })
-        
-        # Eliminar NaN y calcular TC
-        df_tc = df_tc.dropna()
-        df_tc['TC'] = (df_tc['GGAL_BA'] / df_tc['GGAL_US']) * 10
-        
-        return df_tc
-        
-    except Exception as e:
-        st.error(f"Error obteniendo tipo de cambio histórico: {e}")
-        return None
+    intentos = [
+        ("GGAL.BA", "GGAL", 10),  # GGAL con multiplicador 10
+        ("BMA.BA", "BMA", 1),      # Banco Macro sin multiplicador
+        ("YPF.BA", "YPF", 1)       # YPF sin multiplicador
+    ]
+    
+    for ticker_ba, ticker_us, multiplicador in intentos:
+        try:
+            st.info(f"Intentando obtener TC con {ticker_ba}/{ticker_us}...")
+            
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=periodo_dias + 30)  # Pedir más días
+            
+            # Descargar datos
+            stock_ba = yf.download(ticker_ba, start=start_date, end=end_date, progress=False)
+            stock_us = yf.download(ticker_us, start=start_date, end=end_date, progress=False)
+            
+            if stock_ba.empty or stock_us.empty:
+                st.warning(f"No hay datos para {ticker_ba} o {ticker_us}")
+                continue
+            
+            # Crear DataFrame con ambos precios
+            df_tc = pd.DataFrame({
+                'BA': stock_ba['Close'],
+                'US': stock_us['Close']
+            })
+            
+            # Eliminar NaN
+            df_tc = df_tc.dropna()
+            
+            if len(df_tc) < 10:
+                st.warning(f"Muy pocos datos para {ticker_ba}")
+                continue
+            
+            # Calcular TC
+            df_tc['TC'] = (df_tc['BA'] / df_tc['US']) * multiplicador
+            
+            st.success(f"✅ TC obtenido usando {ticker_ba} ({len(df_tc)} días)")
+            return df_tc
+            
+        except Exception as e:
+            st.warning(f"Error con {ticker_ba}: {str(e)}")
+            continue
+    
+    # Si ninguno funcionó
+    st.error("No se pudo obtener TC con ningún ticker. Usando TC fijo como fallback.")
+    return None
 
 # Función para obtener TC actual
 @st.cache_data(ttl=300)
@@ -61,20 +78,28 @@ def obtener_tipo_cambio_actual():
     """
     Calcula el tipo de cambio actual
     """
-    try:
-        ggal_ba = yf.Ticker("GGAL.BA")
-        precio_ba = ggal_ba.history(period="1d")['Close'].iloc[-1]
-        
-        ggal_us = yf.Ticker("GGAL")
-        precio_us = ggal_us.history(period="1d")['Close'].iloc[-1]
-        
-        tipo_cambio = (precio_ba / precio_us) * 10
-        
-        return tipo_cambio, precio_ba, precio_us
-        
-    except Exception as e:
-        st.error(f"Error obteniendo tipo de cambio: {e}")
-        return None, None, None
+    intentos = [
+        ("GGAL.BA", "GGAL", 10),
+        ("BMA.BA", "BMA", 1),
+        ("YPF.BA", "YPF", 1)
+    ]
+    
+    for ticker_ba, ticker_us, multiplicador in intentos:
+        try:
+            stock_ba = yf.download(ticker_ba, period="5d", progress=False)
+            stock_us = yf.download(ticker_us, period="5d", progress=False)
+            
+            if not stock_ba.empty and not stock_us.empty:
+                precio_ba = stock_ba['Close'].iloc[-1]
+                precio_us = stock_us['Close'].iloc[-1]
+                tipo_cambio = (precio_ba / precio_us) * multiplicador
+                
+                return tipo_cambio, precio_ba, precio_us
+                
+        except Exception as e:
+            continue
+    
+    return None, None, None
 
 # Función para calcular RSI
 def calcular_rsi(precios, periodo=14):
@@ -101,28 +126,39 @@ def obtener_datos_accion_usd(ticker, df_tc, periodo_dias=90):
     """
     try:
         ticker_ba = f"{ticker}.BA"
-        stock = yf.Ticker(ticker_ba)
         
         end_date = datetime.now()
-        start_date = end_date - timedelta(days=periodo_dias)
+        start_date = end_date - timedelta(days=periodo_dias + 30)
         
-        df = stock.history(start=start_date, end=end_date)
+        # Usar yf.download en lugar de Ticker
+        df = yf.download(ticker_ba, start=start_date, end=end_date, progress=False)
         
         if df.empty:
             return None, None
         
-        # Crear DataFrame combinado
-        df_combined = pd.DataFrame({
-            'Close_ARS': df['Close'],
-            'Volume': df['Volume']
-        })
-        
-        # Mergear con tipo de cambio (usar el TC más cercano)
-        df_combined = df_combined.join(df_tc[['TC']], how='left')
-        
-        # Forward fill para días donde no hay TC (fines de semana, feriados)
-        df_combined['TC'] = df_combined['TC'].fillna(method='ffill')
-        df_combined['TC'] = df_combined['TC'].fillna(method='bfill')
+        # Si df_tc es None, usar TC fijo actual
+        if df_tc is None:
+            tc_actual, _, _ = obtener_tipo_cambio_actual()
+            if tc_actual is None:
+                return None, None
+            
+            df_combined = pd.DataFrame({
+                'Close_ARS': df['Close'],
+                'Volume': df['Volume'],
+                'TC': tc_actual  # TC fijo
+            })
+        else:
+            # Crear DataFrame combinado
+            df_combined = pd.DataFrame({
+                'Close_ARS': df['Close'],
+                'Volume': df['Volume']
+            })
+            
+            # Mergear con tipo de cambio
+            df_combined = df_combined.join(df_tc[['TC']], how='left')
+            
+            # Forward/backward fill para días sin TC
+            df_combined['TC'] = df_combined['TC'].ffill().bfill()
         
         # Calcular precio en USD
         df_combined['Close_USD'] = df_combined['Close_ARS'] / df_combined['TC']
@@ -133,7 +169,7 @@ def obtener_datos_accion_usd(ticker, df_tc, periodo_dias=90):
         return df_combined, ticker_ba
         
     except Exception as e:
-        st.error(f"Error obteniendo datos de {ticker}: {e}")
+        st.warning(f"Error obteniendo datos de {ticker}: {e}")
         return None, None
 
 # Función principal de análisis
@@ -253,11 +289,28 @@ if st.button("🚀 CALCULAR RSI DE TODAS LAS ACCIONES", type="primary", use_cont
     with st.spinner("Obteniendo tipo de cambio histórico de GGAL..."):
         df_tc = obtener_tipo_cambio_historico(periodo_dias + 30)
     
+    # Si no se pudo obtener TC histórico, ofrecer usar TC fijo
     if df_tc is None or df_tc.empty:
-        st.error("❌ No se pudo obtener el tipo de cambio histórico. Intenta nuevamente.")
-        st.stop()
-    
-    st.success(f"✅ TC histórico obtenido ({len(df_tc)} días)")
+        st.warning("⚠️ No se pudo obtener TC histórico. ¿Usar tipo de cambio actual para todo el período?")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Sí, usar TC fijo"):
+                tc_actual, _, _ = obtener_tipo_cambio_actual()
+                if tc_actual:
+                    st.info(f"Usando TC fijo: ${tc_actual:.2f}")
+                    # Continuar con TC fijo (se maneja en obtener_datos_accion_usd)
+                    df_tc = None
+                else:
+                    st.error("❌ No se pudo obtener ni TC histórico ni actual.")
+                    st.stop()
+            else:
+                st.stop()
+        with col2:
+            if st.button("No, cancelar"):
+                st.stop()
+    else:
+        st.success(f"✅ TC histórico obtenido ({len(df_tc)} días)")
     
     # Crear contenedor para resultados
     resultados = []
